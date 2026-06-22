@@ -1,6 +1,5 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify
 import datetime
-import time
 import json
 
 app = Flask(__name__)
@@ -17,225 +16,9 @@ api_banned = False
 ban_type = "none"  # none, permanent, temp
 ban_until = None
 logs = []
-users = {}  # Store user activity
+users = {}
 
-# ========== ADMIN HTML ==========
-ADMIN_HTML = '''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>⚡ Flash API Admin</title>
-    <style>
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #0a0a2a, #1a0000);
-            min-height: 100vh;
-            color: white;
-            padding: 20px;
-        }
-        .container { max-width: 550px; margin: 0 auto; }
-        .header { text-align: center; margin-bottom: 25px; }
-        .header h1 { color: #ff9800; font-size: 28px; }
-        .header p { color: #ff6666; }
-        .card {
-            background: rgba(255,255,255,0.08);
-            backdrop-filter: blur(10px);
-            border-radius: 16px;
-            padding: 20px;
-            margin-bottom: 16px;
-            border: 1px solid rgba(255,152,0,0.2);
-        }
-        .card h3 { color: #ff9800; margin-bottom: 12px; font-size: 15px; }
-        .status-badge {
-            display: inline-block;
-            padding: 6px 16px;
-            border-radius: 30px;
-            font-weight: bold;
-            font-size: 14px;
-        }
-        .status-on { background: #4caf50; color: white; }
-        .status-off { background: #f44336; color: white; }
-        .status-banned { background: #ff9800; color: black; }
-        .status-temp { background: #ff5722; color: white; }
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 14px;
-            transition: transform 0.15s;
-            margin: 4px;
-        }
-        .btn:active { transform: scale(0.95); }
-        .btn-on { background: #4caf50; color: white; }
-        .btn-off { background: #f44336; color: white; }
-        .btn-ban { background: #ff9800; color: black; }
-        .btn-unban { background: #2196f3; color: white; }
-        .btn-temp { background: #ff5722; color: white; }
-        .btn-logout { background: #dc3545; color: white; }
-        .btn-danger { background: #dc3545; color: white; }
-        .flex { display: flex; gap: 8px; flex-wrap: wrap; }
-        .flex .btn { flex: 1; min-width: 80px; }
-        .log-box {
-            background: rgba(0,0,0,0.5);
-            border-radius: 10px;
-            padding: 12px;
-            max-height: 200px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 11px;
-        }
-        .log-entry { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.05); color: #aaa; }
-        .log-entry .time { color: #ff9800; }
-        input, select {
-            width: 100%;
-            padding: 10px;
-            border: none;
-            border-radius: 10px;
-            background: rgba(0,0,0,0.5);
-            color: white;
-            border: 1px solid #ff9800;
-            margin-bottom: 10px;
-            font-size: 14px;
-        }
-        .api-box {
-            background: rgba(0,0,0,0.4);
-            padding: 10px;
-            border-radius: 8px;
-            font-family: monospace;
-            font-size: 12px;
-            word-break: break-all;
-            color: #ff9800;
-            margin: 8px 0;
-        }
-        .footer { text-align: center; font-size: 10px; color: #666; margin-top: 20px; }
-        .user-count { font-size: 12px; color: #888; }
-        @media (max-width: 400px) { .flex { flex-direction: column; } }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>⚡ FLASH API ADMIN</h1>
-            <p>Owner: {{ owner }}</p>
-        </div>
-
-        {% if not logged_in %}
-        <div class="card" style="text-align:center; padding:30px;">
-            <h3>🔐 Admin Login</h3>
-            <form method="POST">
-                <input type="password" name="password" placeholder="Enter admin password" required>
-                <button type="submit" class="btn btn-on" style="width:100%;">Login</button>
-            </form>
-        </div>
-        {% else %}
-
-        <div class="card">
-            <h3>📊 Status</h3>
-            <p>Flash: <span class="status-badge status-{{ flash_status }}">{{ flash_status.upper() }}</span></p>
-            <p>API: 
-                <span class="status-badge {% if api_banned %}status-banned{% elif ban_type == 'temp' %}status-temp{% else %}status-on{% endif %}">
-                    {% if api_banned and ban_type == 'temp' %}TEMP BANNED{% elif api_banned %}BANNED{% else %}ACTIVE{% endif %}
-                </span>
-                {% if ban_until and ban_type == 'temp' %}
-                <span style="font-size:11px; color:#888;">(until {{ ban_until }})</span>
-                {% endif %}
-            </p>
-            <p class="user-count">👥 Total Users: {{ user_count }}</p>
-        </div>
-
-        <div class="card">
-            <h3>🎮 Flash Controls</h3>
-            <div class="flex">
-                <form method="POST" style="flex:1;">
-                    <input type="hidden" name="action" value="on">
-                    <button type="submit" class="btn btn-on" style="width:100%;">💡 ON</button>
-                </form>
-                <form method="POST" style="flex:1;">
-                    <input type="hidden" name="action" value="off">
-                    <button type="submit" class="btn btn-off" style="width:100%;">💡 OFF</button>
-                </form>
-            </div>
-        </div>
-
-        <div class="card">
-            <h3>🚫 API Control</h3>
-            <div class="flex">
-                <form method="POST" style="flex:1;">
-                    <input type="hidden" name="action" value="ban">
-                    <button type="submit" class="btn btn-ban" style="width:100%;">🚫 Permanent Ban</button>
-                </form>
-                <form method="POST" style="flex:1;">
-                    <input type="hidden" name="action" value="unban">
-                    <button type="submit" class="btn btn-unban" style="width:100%;">✅ Unban</button>
-                </form>
-            </div>
-            <div class="flex" style="margin-top:8px;">
-                <form method="POST" style="flex:1;">
-                    <input type="hidden" name="action" value="tempban_5min">
-                    <button type="submit" class="btn btn-temp" style="width:100%;">⏱️ 5 Min Ban</button>
-                </form>
-                <form method="POST" style="flex:1;">
-                    <input type="hidden" name="action" value="tempban_10min">
-                    <button type="submit" class="btn btn-temp" style="width:100%;">⏱️ 10 Min Ban</button>
-                </form>
-                <form method="POST" style="flex:1;">
-                    <input type="hidden" name="action" value="tempban_1hour">
-                    <button type="submit" class="btn btn-temp" style="width:100%;">⏱️ 1 Hour Ban</button>
-                </form>
-            </div>
-        </div>
-
-        <div class="card">
-            <h3>🔑 API Info</h3>
-            <p><strong>Key:</strong> <code>{{ api_key }}</code></p>
-            <div class="api-box">
-                /api?key=satvirflash&action=on<br>
-                /api?key=satvirflash&action=off<br>
-                /api?key=satvirflash&action=status
-            </div>
-        </div>
-
-        <div class="card">
-            <h3>👥 Users Activity</h3>
-            <div class="log-box" style="max-height:150px;">
-                {% for uid, data in users.items() %}
-                <div class="log-entry">{{ uid }}: {{ data.get('last_action', 'idle') }} ({{ data.get('count', 0) }} requests)</div>
-                {% endfor %}
-            </div>
-        </div>
-
-        <div class="card">
-            <h3>📜 Logs</h3>
-            <div class="log-box">
-                {% for log in logs %}
-                <div class="log-entry">{{ log }}</div>
-                {% endfor %}
-            </div>
-            <form method="POST" style="margin-top:8px;">
-                <input type="hidden" name="action" value="clearlogs">
-                <button type="submit" class="btn btn-ban" style="width:100%;">🗑️ Clear Logs</button>
-            </form>
-        </div>
-
-        <form method="POST">
-            <input type="hidden" name="action" value="logout">
-            <button type="submit" class="btn btn-logout" style="width:100%;">🚪 Logout</button>
-        </form>
-
-        {% endif %}
-
-        <div class="footer">⚡ SATVIR FLASH API | @notxsatvir</div>
-    </div>
-</body>
-</html>
-'''
-
-# ========== HELPER ==========
+# ========== HELPERS ==========
 def add_log(msg):
     logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}")
     if len(logs) > 100:
@@ -278,19 +61,21 @@ def api():
     # Check ban
     if api_banned:
         if ban_type == "temp" and ban_until:
-            if datetime.datetime.now() > datetime.datetime.fromisoformat(ban_until):
-                # Auto unban
-                global api_banned, ban_type, ban_until
-                api_banned = False
-                ban_type = "none"
-                ban_until = None
-                add_log("⏰ Temp ban expired, API auto-unbanned")
-            else:
-                users[user_ip]["last_action"] = "temp_banned"
-                return jsonify({
-                    "error": f"API is temporarily banned until {ban_until}",
-                    "owner": OWNER
-                }), 403
+            try:
+                if datetime.datetime.now() > datetime.datetime.fromisoformat(ban_until):
+                    global api_banned, ban_type, ban_until
+                    api_banned = False
+                    ban_type = "none"
+                    ban_until = None
+                    add_log("⏰ Temp ban expired, API auto-unbanned")
+                else:
+                    users[user_ip]["last_action"] = "temp_banned"
+                    return jsonify({
+                        "error": f"API is temporarily banned until {ban_until}",
+                        "owner": OWNER
+                    }), 403
+            except:
+                pass
         else:
             users[user_ip]["last_action"] = "banned"
             return jsonify({"error": "API is permanently banned by admin", "owner": OWNER}), 403
@@ -326,89 +111,137 @@ def api():
             "owner": OWNER
         }), 400
 
-@app.route('/admin', methods=['GET', 'POST'])
+@app.route('/admin')
 def admin():
-    logged_in = request.cookies.get('admin_session') == 'true'
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head><title>Flash Admin</title>
+    <style>
+        body { background: #0a0a2a; color: white; font-family: Arial; padding: 20px; }
+        .card { background: rgba(255,255,255,0.1); border-radius: 16px; padding: 20px; margin-bottom: 16px; border: 1px solid #ff9800; max-width: 500px; margin: auto; }
+        h1 { color: #ff9800; text-align: center; }
+        .btn { padding: 10px 20px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; margin: 5px; }
+        .btn-on { background: #4caf50; color: white; }
+        .btn-off { background: #f44336; color: white; }
+        .btn-ban { background: #ff9800; color: black; }
+        .btn-unban { background: #2196f3; color: white; }
+        .btn-temp { background: #ff5722; color: white; }
+        .flex { display: flex; flex-wrap: wrap; gap: 5px; }
+        .flex .btn { flex: 1; min-width: 80px; }
+        .status-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-weight: bold; }
+        .status-on { background: #4caf50; }
+        .status-off { background: #f44336; }
+        .status-banned { background: #ff9800; color: black; }
+        .log-box { background: rgba(0,0,0,0.5); border-radius: 10px; padding: 10px; max-height: 150px; overflow-y: auto; font-size: 11px; }
+        .log-entry { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        a { color: #ff9800; text-decoration: none; }
+        .footer { text-align: center; margin-top: 20px; font-size: 11px; color: #666; }
+    </style>
+    </head>
+    <body>
+    <div style="max-width:500px; margin:auto;">
+    <h1>⚡ Flash API Admin</h1>
+    <p style="text-align:center; color:#ff6666;">Owner: @notxsatvir</p>
     
-    if request.method == 'POST':
-        password = request.form.get('password')
-        action = request.form.get('action')
-        
-        if password == ADMIN_PASSWORD:
-            logged_in = True
-            response = app.make_response(render_template_string(ADMIN_HTML, 
-                logged_in=True,
-                flash_status=flash_status,
-                api_banned=api_banned,
-                ban_type=ban_type,
-                ban_until=ban_until,
-                logs=logs[-50:],
-                users=users,
-                user_count=len(users),
-                api_key=API_KEY,
-                owner=OWNER
-            ))
-            response.set_cookie('admin_session', 'true', max_age=3600)
-            return response
-        
-        elif action == 'logout':
-            logged_in = False
-            response = app.make_response(render_template_string(ADMIN_HTML, logged_in=False))
-            response.set_cookie('admin_session', '', expires=0)
-            return response
-        
-        elif logged_in:
-            global flash_status, api_banned, ban_type, ban_until
-            if action == 'on':
-                flash_status = 'on'
-                add_log("Flash ON by admin")
-            elif action == 'off':
-                flash_status = 'off'
-                add_log("Flash OFF by admin")
-            elif action == 'ban':
-                api_banned = True
-                ban_type = "permanent"
-                ban_until = None
-                add_log("🚫 API permanently banned by admin")
-            elif action == 'unban':
-                api_banned = False
-                ban_type = "none"
-                ban_until = None
-                add_log("✅ API unbanned by admin")
-            elif action == 'tempban_5min':
-                api_banned = True
-                ban_type = "temp"
-                ban_until = (datetime.datetime.now() + datetime.timedelta(minutes=5)).isoformat()
-                add_log("⏱️ API temp banned for 5 minutes")
-            elif action == 'tempban_10min':
-                api_banned = True
-                ban_type = "temp"
-                ban_until = (datetime.datetime.now() + datetime.timedelta(minutes=10)).isoformat()
-                add_log("⏱️ API temp banned for 10 minutes")
-            elif action == 'tempban_1hour':
-                api_banned = True
-                ban_type = "temp"
-                ban_until = (datetime.datetime.now() + datetime.timedelta(hours=1)).isoformat()
-                add_log("⏱️ API temp banned for 1 hour")
-            elif action == 'clearlogs':
-                logs.clear()
-                add_log("🗑️ Logs cleared by admin")
+    <div class="card">
+        <h3>📊 Status</h3>
+        <p>Flash: <span class="status-badge status-''' + flash_status + '''">''' + flash_status.upper() + '''</span></p>
+        <p>API: <span class="status-badge ''' + ('status-banned' if api_banned else 'status-on') + '''">''' + ('BANNED' if api_banned else 'ACTIVE') + '''</span></p>
+        <p style="font-size:12px; color:#888;">Ban Type: ''' + ban_type + '''</p>
+        <p style="font-size:12px; color:#888;">Users: ''' + str(len(users)) + '''</p>
+    </div>
     
-    if logged_in:
-        return render_template_string(ADMIN_HTML,
-            logged_in=True,
-            flash_status=flash_status,
-            api_banned=api_banned,
-            ban_type=ban_type,
-            ban_until=ban_until,
-            logs=logs[-50:],
-            users=users,
-            user_count=len(users),
-            api_key=API_KEY,
-            owner=OWNER
-        )
+    <div class="card">
+        <h3>🎮 Controls</h3>
+        <div class="flex">
+            <a href="/admin/on" class="btn btn-on">💡 ON</a>
+            <a href="/admin/off" class="btn btn-off">💡 OFF</a>
+        </div>
+    </div>
     
-    return render_template_string(ADMIN_HTML, logged_in=False)
+    <div class="card">
+        <h3>🚫 Ban Controls</h3>
+        <div class="flex">
+            <a href="/admin/ban" class="btn btn-ban">🚫 Permanent</a>
+            <a href="/admin/tempban/5" class="btn btn-temp">⏱️ 5 min</a>
+            <a href="/admin/tempban/10" class="btn btn-temp">⏱️ 10 min</a>
+            <a href="/admin/tempban/60" class="btn btn-temp">⏱️ 1 hour</a>
+            <a href="/admin/unban" class="btn btn-unban">✅ Unban</a>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>📜 Logs</h3>
+        <div class="log-box">
+            ''' + ''.join([f'<div class="log-entry">{log}</div>' for log in logs[-15:]]) + '''
+        </div>
+        <p style="margin-top:8px;"><a href="/admin/clearlogs" class="btn btn-ban" style="display:inline-block;padding:8px 16px;border-radius:10px;background:#ff9800;color:black;text-decoration:none;">🗑️ Clear Logs</a></p>
+    </div>
+    
+    <div class="card">
+        <h3>🔑 API Info</h3>
+        <p><strong>Key:</strong> satvirflash</p>
+        <p style="font-size:11px; word-break:break-all; background:#000; padding:8px; border-radius:8px;">
+        /api?key=satvirflash&action=on<br>
+        /api?key=satvirflash&action=off<br>
+        /api?key=satvirflash&action=status
+        </p>
+    </div>
+    
+    <div class="footer">⚡ SATVIR FLASH API | @notxsatvir</div>
+    </div>
+    </body>
+    </html>
+    '''
+
+@app.route('/admin/on')
+def admin_on():
+    global flash_status
+    flash_status = 'on'
+    add_log("Flash ON by admin")
+    return '<script>alert("✅ Flash turned ON!"); window.location="/admin";</script>'
+
+@app.route('/admin/off')
+def admin_off():
+    global flash_status
+    flash_status = 'off'
+    add_log("Flash OFF by admin")
+    return '<script>alert("✅ Flash turned OFF!"); window.location="/admin";</script>'
+
+@app.route('/admin/ban')
+def admin_ban():
+    global api_banned, ban_type, ban_until
+    api_banned = True
+    ban_type = "permanent"
+    ban_until = None
+    add_log("🚫 API permanently banned by admin")
+    return '<script>alert("🚫 API permanently banned!"); window.location="/admin";</script>'
+
+@app.route('/admin/unban')
+def admin_unban():
+    global api_banned, ban_type, ban_until
+    api_banned = False
+    ban_type = "none"
+    ban_until = None
+    add_log("✅ API unbanned by admin")
+    return '<script>alert("✅ API unbanned!"); window.location="/admin";</script>'
+
+@app.route('/admin/tempban/<int:minutes>')
+def admin_tempban(minutes):
+    global api_banned, ban_type, ban_until
+    api_banned = True
+    ban_type = "temp"
+    ban_until = (datetime.datetime.now() + datetime.timedelta(minutes=minutes)).isoformat()
+    add_log(f"⏱️ API temp banned for {minutes} minutes")
+    return f'<script>alert("⏱️ API temp banned for {minutes} minutes!"); window.location="/admin";</script>'
+
+@app.route('/admin/clearlogs')
+def admin_clearlogs():
+    global logs
+    logs = []
+    add_log("🗑️ Logs cleared by admin")
+    return '<script>alert("🗑️ Logs cleared!"); window.location="/admin";</script>'
 
 @app.route('/health')
 def health():
