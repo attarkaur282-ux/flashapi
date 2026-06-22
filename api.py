@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template_string
 import datetime
-import os
+import time
+import json
 
 app = Flask(__name__)
 
@@ -13,7 +14,10 @@ ADMIN_PASSWORD = "admin123"
 # ========== STATE ==========
 flash_status = "off"
 api_banned = False
+ban_type = "none"  # none, permanent, temp
+ban_until = None
 logs = []
+users = {}  # Store user activity
 
 # ========== ADMIN HTML ==========
 ADMIN_HTML = '''
@@ -55,6 +59,7 @@ ADMIN_HTML = '''
         .status-on { background: #4caf50; color: white; }
         .status-off { background: #f44336; color: white; }
         .status-banned { background: #ff9800; color: black; }
+        .status-temp { background: #ff5722; color: white; }
         .btn {
             padding: 10px 20px;
             border: none;
@@ -70,9 +75,11 @@ ADMIN_HTML = '''
         .btn-off { background: #f44336; color: white; }
         .btn-ban { background: #ff9800; color: black; }
         .btn-unban { background: #2196f3; color: white; }
+        .btn-temp { background: #ff5722; color: white; }
         .btn-logout { background: #dc3545; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
         .flex { display: flex; gap: 8px; flex-wrap: wrap; }
-        .flex .btn { flex: 1; min-width: 100px; }
+        .flex .btn { flex: 1; min-width: 80px; }
         .log-box {
             background: rgba(0,0,0,0.5);
             border-radius: 10px;
@@ -84,7 +91,7 @@ ADMIN_HTML = '''
         }
         .log-entry { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.05); color: #aaa; }
         .log-entry .time { color: #ff9800; }
-        input {
+        input, select {
             width: 100%;
             padding: 10px;
             border: none;
@@ -106,6 +113,7 @@ ADMIN_HTML = '''
             margin: 8px 0;
         }
         .footer { text-align: center; font-size: 10px; color: #666; margin-top: 20px; }
+        .user-count { font-size: 12px; color: #888; }
         @media (max-width: 400px) { .flex { flex-direction: column; } }
     </style>
 </head>
@@ -129,13 +137,19 @@ ADMIN_HTML = '''
         <div class="card">
             <h3>📊 Status</h3>
             <p>Flash: <span class="status-badge status-{{ flash_status }}">{{ flash_status.upper() }}</span></p>
-            <p>API: <span class="status-badge {% if api_banned %}status-banned{% else %}status-on{% endif %}">
-                {% if api_banned %}BANNED{% else %}ACTIVE{% endif %}
-            </span></p>
+            <p>API: 
+                <span class="status-badge {% if api_banned %}status-banned{% elif ban_type == 'temp' %}status-temp{% else %}status-on{% endif %}">
+                    {% if api_banned and ban_type == 'temp' %}TEMP BANNED{% elif api_banned %}BANNED{% else %}ACTIVE{% endif %}
+                </span>
+                {% if ban_until and ban_type == 'temp' %}
+                <span style="font-size:11px; color:#888;">(until {{ ban_until }})</span>
+                {% endif %}
+            </p>
+            <p class="user-count">👥 Total Users: {{ user_count }}</p>
         </div>
 
         <div class="card">
-            <h3>🎮 Controls</h3>
+            <h3>🎮 Flash Controls</h3>
             <div class="flex">
                 <form method="POST" style="flex:1;">
                     <input type="hidden" name="action" value="on">
@@ -146,14 +160,32 @@ ADMIN_HTML = '''
                     <button type="submit" class="btn btn-off" style="width:100%;">💡 OFF</button>
                 </form>
             </div>
-            <div class="flex" style="margin-top:8px;">
+        </div>
+
+        <div class="card">
+            <h3>🚫 API Control</h3>
+            <div class="flex">
                 <form method="POST" style="flex:1;">
                     <input type="hidden" name="action" value="ban">
-                    <button type="submit" class="btn btn-ban" style="width:100%;">🚫 Ban</button>
+                    <button type="submit" class="btn btn-ban" style="width:100%;">🚫 Permanent Ban</button>
                 </form>
                 <form method="POST" style="flex:1;">
                     <input type="hidden" name="action" value="unban">
                     <button type="submit" class="btn btn-unban" style="width:100%;">✅ Unban</button>
+                </form>
+            </div>
+            <div class="flex" style="margin-top:8px;">
+                <form method="POST" style="flex:1;">
+                    <input type="hidden" name="action" value="tempban_5min">
+                    <button type="submit" class="btn btn-temp" style="width:100%;">⏱️ 5 Min Ban</button>
+                </form>
+                <form method="POST" style="flex:1;">
+                    <input type="hidden" name="action" value="tempban_10min">
+                    <button type="submit" class="btn btn-temp" style="width:100%;">⏱️ 10 Min Ban</button>
+                </form>
+                <form method="POST" style="flex:1;">
+                    <input type="hidden" name="action" value="tempban_1hour">
+                    <button type="submit" class="btn btn-temp" style="width:100%;">⏱️ 1 Hour Ban</button>
                 </form>
             </div>
         </div>
@@ -165,6 +197,15 @@ ADMIN_HTML = '''
                 /api?key=satvirflash&action=on<br>
                 /api?key=satvirflash&action=off<br>
                 /api?key=satvirflash&action=status
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>👥 Users Activity</h3>
+            <div class="log-box" style="max-height:150px;">
+                {% for uid, data in users.items() %}
+                <div class="log-entry">{{ uid }}: {{ data.get('last_action', 'idle') }} ({{ data.get('count', 0) }} requests)</div>
+                {% endfor %}
             </div>
         </div>
 
@@ -194,6 +235,12 @@ ADMIN_HTML = '''
 </html>
 '''
 
+# ========== HELPER ==========
+def add_log(msg):
+    logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}")
+    if len(logs) > 100:
+        logs.pop(0)
+
 # ========== ROUTES ==========
 @app.route('/')
 def home():
@@ -203,35 +250,62 @@ def home():
         "channel": CHANNEL,
         "status": flash_status,
         "banned": api_banned,
+        "ban_type": ban_type,
+        "ban_until": ban_until,
         "endpoints": {
             "/api?key=satvirflash&action=on": "Turn flash ON",
             "/api?key=satvirflash&action=off": "Turn flash OFF",
             "/api?key=satvirflash&action=status": "Check status",
             "/admin": "Admin panel"
-        },
-        "note": "Use in mobile browser for flashlight control"
+        }
     })
 
 @app.route('/api')
 def api():
     key = request.args.get('key')
     action = request.args.get('action', '').lower()
+    user_ip = request.remote_addr
+    
+    # Track user
+    if user_ip not in users:
+        users[user_ip] = {"count": 0, "last_action": "first_request"}
+    users[user_ip]["count"] += 1
     
     if key != API_KEY:
+        users[user_ip]["last_action"] = "invalid_key"
         return jsonify({"error": "Invalid API key", "owner": OWNER}), 401
     
+    # Check ban
     if api_banned:
-        return jsonify({"error": "API is banned by admin", "owner": OWNER}), 403
+        if ban_type == "temp" and ban_until:
+            if datetime.datetime.now() > datetime.datetime.fromisoformat(ban_until):
+                # Auto unban
+                global api_banned, ban_type, ban_until
+                api_banned = False
+                ban_type = "none"
+                ban_until = None
+                add_log("⏰ Temp ban expired, API auto-unbanned")
+            else:
+                users[user_ip]["last_action"] = "temp_banned"
+                return jsonify({
+                    "error": f"API is temporarily banned until {ban_until}",
+                    "owner": OWNER
+                }), 403
+        else:
+            users[user_ip]["last_action"] = "banned"
+            return jsonify({"error": "API is permanently banned by admin", "owner": OWNER}), 403
     
     global flash_status
+    users[user_ip]["last_action"] = action
+    
     if action == 'on':
         flash_status = 'on'
-        logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Flash ON via API")
+        add_log(f"Flash ON via API (IP: {user_ip})")
         return jsonify({"success": True, "flash": "ON", "owner": OWNER})
     
     elif action == 'off':
         flash_status = 'off'
-        logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Flash OFF via API")
+        add_log(f"Flash OFF via API (IP: {user_ip})")
         return jsonify({"success": True, "flash": "OFF", "owner": OWNER})
     
     elif action == 'status':
@@ -239,6 +313,8 @@ def api():
             "success": True,
             "flash": flash_status,
             "banned": api_banned,
+            "ban_type": ban_type,
+            "ban_until": ban_until,
             "owner": OWNER,
             "channel": CHANNEL
         })
@@ -264,7 +340,11 @@ def admin():
                 logged_in=True,
                 flash_status=flash_status,
                 api_banned=api_banned,
-                logs=logs[-30:],
+                ban_type=ban_type,
+                ban_until=ban_until,
+                logs=logs[-50:],
+                users=users,
+                user_count=len(users),
                 api_key=API_KEY,
                 owner=OWNER
             ))
@@ -278,29 +358,52 @@ def admin():
             return response
         
         elif logged_in:
-            global flash_status, api_banned
+            global flash_status, api_banned, ban_type, ban_until
             if action == 'on':
                 flash_status = 'on'
-                logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Flash ON by admin")
+                add_log("Flash ON by admin")
             elif action == 'off':
                 flash_status = 'off'
-                logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Flash OFF by admin")
+                add_log("Flash OFF by admin")
             elif action == 'ban':
                 api_banned = True
-                logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] API BANNED by admin")
+                ban_type = "permanent"
+                ban_until = None
+                add_log("🚫 API permanently banned by admin")
             elif action == 'unban':
                 api_banned = False
-                logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] API UNBANNED by admin")
+                ban_type = "none"
+                ban_until = None
+                add_log("✅ API unbanned by admin")
+            elif action == 'tempban_5min':
+                api_banned = True
+                ban_type = "temp"
+                ban_until = (datetime.datetime.now() + datetime.timedelta(minutes=5)).isoformat()
+                add_log("⏱️ API temp banned for 5 minutes")
+            elif action == 'tempban_10min':
+                api_banned = True
+                ban_type = "temp"
+                ban_until = (datetime.datetime.now() + datetime.timedelta(minutes=10)).isoformat()
+                add_log("⏱️ API temp banned for 10 minutes")
+            elif action == 'tempban_1hour':
+                api_banned = True
+                ban_type = "temp"
+                ban_until = (datetime.datetime.now() + datetime.timedelta(hours=1)).isoformat()
+                add_log("⏱️ API temp banned for 1 hour")
             elif action == 'clearlogs':
                 logs.clear()
-                logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Logs cleared by admin")
+                add_log("🗑️ Logs cleared by admin")
     
     if logged_in:
         return render_template_string(ADMIN_HTML,
             logged_in=True,
             flash_status=flash_status,
             api_banned=api_banned,
-            logs=logs[-30:],
+            ban_type=ban_type,
+            ban_until=ban_until,
+            logs=logs[-50:],
+            users=users,
+            user_count=len(users),
             api_key=API_KEY,
             owner=OWNER
         )
@@ -311,9 +414,5 @@ def admin():
 def health():
     return jsonify({"status": "ok", "owner": OWNER})
 
-# ========== VERCEL REQUIRED ==========
-# Vercel needs this variable named 'app'
-# app is already defined above
-
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, debug=True)
