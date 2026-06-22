@@ -260,33 +260,32 @@ def admin():
         
         if password == ADMIN_PASSWORD:
             logged_in = True
-            response = render_template_string(ADMIN_HTML, 
+            response = app.make_response(render_template_string(ADMIN_HTML, 
                 logged_in=True,
                 flash_status=flash_status,
                 api_banned=api_banned,
                 logs=logs[-30:],
                 api_key=API_KEY,
                 owner=OWNER
-            )
+            ))
             response.set_cookie('admin_session', 'true', max_age=3600)
             return response
         
         elif action == 'logout':
             logged_in = False
-            response = render_template_string(ADMIN_HTML, logged_in=False)
+            response = app.make_response(render_template_string(ADMIN_HTML, logged_in=False))
             response.set_cookie('admin_session', '', expires=0)
             return response
         
         elif logged_in:
+            global flash_status, api_banned
             if action == 'on':
-                global flash_status
                 flash_status = 'on'
                 logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Flash ON by admin")
             elif action == 'off':
                 flash_status = 'off'
                 logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Flash OFF by admin")
             elif action == 'ban':
-                global api_banned
                 api_banned = True
                 logs.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] API BANNED by admin")
             elif action == 'unban':
@@ -312,5 +311,9 @@ def admin():
 def health():
     return jsonify({"status": "ok", "owner": OWNER})
 
+# ========== VERCEL REQUIRED ==========
+# Vercel needs this variable named 'app'
+# app is already defined above
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
